@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <title>Monitor do Comércio Exterior Brasileiro</title>
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+  <style>
+    body { 
+      margin: 0; 
+      padding: 0; 
+      font-family: 'Helvetica Neue', sans-serif; 
+      background-color: #f4f4f4; 
+    }
+    #dashboard-container {
+      position: relative;
+      width: 100vw;
+      height: calc(100vh - 20px); 
+      margin: auto 0;
+      display: flex;
+      flex-direction: column;
+    }
+    #map-chart {
+      height: 65%;
+      position: relative;
+    }
+    #line-chart {
+      height: 35%;
+    }
+    .selector-container {
+      position: absolute;
+      top: 20px;
+      right: 20px;
+      z-index: 100;
+    }
+    .selector-container select {
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      font-size: 14px;
+      padding: 5px;
+    }
+
+    #visual-map-title {
+      position: absolute;
+      top: calc(13% + 15px);
+      left: 88%;
+      transform: translateY(150px) rotate(90deg);
+      transform-origin: center;
+      white-space: nowrap;
+      font-size: 11px;
+      color: #333;
+      z-index: 10;
+    }
+  </style>
+</head>
+<body>
+  <div id="dashboard-container">
+    <div class="selector-container">
+      <select id="metricSelector">
+        <option value="EXP">Exportações</option>
+        <option value="IMP">Importações</option>
+        <option value="BAL">Balança Comercial (Exp - Imp)</option>
+      </select>
+    </div>
+  
+    <div id="map-chart"></div>
+    <div id="line-chart"></div>
+
+    <div id="visual-map-title">Volume negociado com o país (Bilhões de US$)</div>
+  </div>
+  <script>
+    const mapChart = echarts.init(document.getElementById('map-chart'));
+    const lineChart = echarts.init(document.getElementById('line-chart'));
+
+    mapChart.showLoading();
+    lineChart.showLoading();
+
+    const dataFileName = "BR-exportacoes_importacoes_2025.json";
+    
+    Promise.all([
+      fetch("world.json"),
+      fetch(dataFileName)
+    ])
+    .then(responses => {
+        if (!responses[1].ok) {
+            throw new Error(`Arquivo de dados ('${dataFileName}') não encontrado.`);
+        }
+        return Promise.all(responses.map(res => res.json()));
+    })
+    .then(([worldJson, tradeData]) => {
+        mapChart.hideLoading();
+        lineChart.hideLoading();
+        echarts.registerMap('world', worldJson);
+
+        const displayYear = '2025';
+        
+        const years = [...new Set([...Object.keys(tradeData.EXP), ...Object.keys(tradeData.IMP), ...Object.keys(tradeData.BAL)])].sort();
+
+        const expDataYear = tradeData.EXP[displayYear].map(d => ({ name: d.name, value: d.us_value }));
+        const impDataYear = tradeData.IMP[displayYear].map(d => ({ name: d.name, value: d.us_value }));
+        const balDataYear = tradeData.BAL[displayYear].map(d => ({ name: d.name, value: d.us_value }));
+        
+        const mapData = {
+          EXP: expDataYear,
+          IMP: impDataYear,
+          BAL: balDataYear,
+        };
+        
+        const valueFormatter = (value) => `${(value / 1e9).toFixed(0)}`;
+        
+        const visualMaps = {
+          EXP: { type: 'continuous', seriesIndex: [0], right: '5%', top: '25%', itemHeight: 300, align: 'top', calculable: true, formatter: valueFormatter, inRange: { color: ['#edf8e9', '#a8ddb5', '#238b45', '#00441b'] }},
+          IMP: { type: 'continuous', seriesIndex: [0], right: '5%', top: '25%', itemHeight: 300, align: 'top', calculable: true, formatter: valueFormatter, inRange: { color: ['#fee5d9', '#fcae91', '#fb6a4a', '#cb181d'] }},
+          BAL: { type: 'continuous', seriesIndex: [0], right: '5%', top: '25%', itemHeight: 300, align: 'top', calculable: true, formatter: valueFormatter, inRange: { color: ['#b2182b', '#ef8a62', '#fddbc7', '#fffacd', '#d9f0d3', '#a6dba0', '#1b7837'] }}
+        };
+
+        const noDataVisualMap = { 
+            type: 'piecewise', seriesIndex: [], show: true,
+            pieces: [{ label: 'Países sem dados' }],
+            color: ['#e0e0e0'], right: '5%', 
+            bottom: '2%',
+            itemWidth: 18, itemHeight: 12,
+            calculable: false, hoverLink: false,
+            textStyle: { fontSize: 12 }
+        };
+
+        const titleTemplates = { EXP: 'Volume de Exportações do Brasil', IMP: 'Volume de Importações do Brasil', BAL: 'Volume na balança comercial do Brasil' };
+
+        const lineStyles = { EXP: { normal: { color: '#a8ddb5', width: 2 }, emphasis: { color: '#00441b', width: 2 } }, IMP: { normal: { color: '#fcae91', width: 2 }, emphasis: { color: '#cb181d', width: 2 } }, BAL: { normal: { color: '#5470c6', width: 2 }, emphasis: { color: '#000080', width: 2 } }};
+
+        function getVisualMapOptions(metric, year) {
+            const data = (tradeData[metric][year] || []).map(d => ({ name: d.name, value: d.us_value }));
+            let min = 0, max = 0;
+            if (data.length > 0) {
+                const values = data.map(d => d.value);
+                const minVal = Math.min(...values);
+                const maxVal = Math.max(...values);
+                if (metric === 'BAL') {
+                    const symMax = Math.ceil(Math.max(Math.abs(minVal), Math.abs(maxVal)));
+                    min = -symMax;
+                    max = symMax;
+                } else {
+                    min = Math.floor(minVal);
+                    max = Math.ceil(maxVal);
+                }
+            }
+            const newVisualMap = { ...visualMaps[metric] };
+            newVisualMap.min = min;
+            newVisualMap.max = max;
+            return newVisualMap;
+        }
+
+        const totalExpLineData = years.map(year => (tradeData.EXP[year] || []).reduce((sum, item) => sum + item.us_value, 0));
+        const totalImpLineData = years.map(year => (tradeData.IMP[year] || []).reduce((sum, item) => sum + item.us_value, 0));
+        const totalBalanceLineData = years.map(year => (tradeData.BAL[year] || []).reduce((sum, item) => sum + item.us_value, 0));
+
+        const mapOption = {
+            title: { id: 'mainTitle', text: `${titleTemplates.EXP} (Ano ${displayYear})`, subtext: 'Dados do Monitor do Comércio Exterior Brasileiro', left: 'center', top: 20 },
+            tooltip: { trigger: 'item', formatter: function (params) { if (params.value != null && isFinite(params.value)) { return `${params.name}<br/><b>US$ ${(params.value / 1e9).toFixed(2).replace('.', ',')} bi</b>`; } return `${params.name}<br/><i>(sem dados)</i>`; }},
+            geo: { map: 'world', roam: true, top: '15%', bottom: '5%', itemStyle: { areaColor: '#e0e0e0', borderColor: '#b0b0b0' }, emphasis: { itemStyle: { areaColor: '#ffc107' } }},
+            visualMap: [ getVisualMapOptions('EXP', displayYear), noDataVisualMap ],
+            series: [ { id: 'mapSeries', name: 'Dados do Mapa', type: 'map', geoIndex: 0, data: mapData.EXP } ]
+        };
+
+        const lineOption = {
+            title: [
+                { text: `Totais por ano`, left: '10%', top: '5%', textStyle: { fontSize: 16, fontWeight: 'bold' } },
+                { text: 'Série Histórica', left: 'center', bottom: '10%', textStyle: { fontSize: 12, fontWeight: 'normal', color: '#333' } }
+            ],
+            tooltip: { trigger: 'axis', formatter: function (params) { if (!params || params.length === 0) return ''; const year = params[0].name; let tooltip = `<b>Ano ${year}</b><br/>`; params.forEach(param => { const seriesName = param.seriesName; const value = (param.value / 1e9).toFixed(1).replace('.', ','); const marker = param.marker; let label = seriesName; if (seriesName === 'Exportações') label = 'Total de Exportações do Brasil'; if (seriesName === 'Importações') label = 'Total de Importações do Brasil'; if (seriesName === 'Balança Comercial') label = 'Total de Balança Comercial do Brasil'; tooltip += `<br/>${marker} ${label}: US$ ${value} bi`; }); return tooltip; }},
+            legend: { data: ['Exportações', 'Importações', 'Balança Comercial'], top: '15%', left: 'center', selectedMode: 'multiple' },
+            grid: { left: '8%', right: '5%', bottom: '20%', top: '30%', containLabel: true },
+            xAxis: { 
+                type: 'category', 
+                boundaryGap: false, 
+                data: years, 
+                axisPointer: { 
+                    type: 'shadow',
+                    shadowStyle: {
+                        color: 'rgba(255, 165, 0, 0.15)'
+                    }
+                } 
+            },
+            yAxis: { 
+                type: 'value', 
+                name: 'Bilhões de US$',
+                nameLocation: 'end', 
+                nameGap: 15,         
+                nameTextStyle: {
+                    align: 'right', 
+                    padding: [0, -25, 0, 0]
+                },
+                axisLabel: { formatter: value => (value / 1e9).toFixed(0) } 
+            },
+            dataZoom: [
+                { 
+                    type: 'slider', 
+                    xAxisIndex: 0, 
+                    start: 0, 
+                    end: 100, 
+                    bottom: '2%', 
+                    height: 20, 
+                    showDetail: false,
+                    fillerColor: 'rgba(255, 165, 0, 0.15)'
+                },
+                { type: 'inside', xAxisIndex: 0, start: 0, end: 100 }
+            ],
+            series: [
+                { name: 'Exportações', type: 'line', showSymbol: true, symbol: 'emptyCircle', symbolSize: 5, smooth: true, data: totalExpLineData, color: lineStyles.EXP.normal.color, lineStyle: { width: lineStyles.EXP.normal.width }, emphasis: { focus: 'series', blurScope: 'coordinateSystem' }, blur: { lineStyle: { color: '#ccc' }, itemStyle: { color: '#ccc'} } },
+                { name: 'Importações', type: 'line', showSymbol: true, symbol: 'emptyCircle', symbolSize: 5, smooth: true, data: totalImpLineData, color: lineStyles.IMP.normal.color, lineStyle: { width: lineStyles.IMP.normal.width }, emphasis: { focus: 'series', blurScope: 'coordinateSystem' }, blur: { lineStyle: { color: '#ccc' }, itemStyle: { color: '#ccc'} } },
+                { name: 'Balança Comercial', type: 'line', showSymbol: true, symbol: 'emptyCircle', symbolSize: 5, smooth: true, data: totalBalanceLineData, color: lineStyles.BAL.normal.color, lineStyle: { type: 'dashed', width: lineStyles.BAL.normal.width }, emphasis: { focus: 'series', blurScope: 'coordinateSystem' }, blur: { lineStyle: { color: '#ccc' }, itemStyle: { color: '#ccc'} } }
+            ]
+        };
+
+        mapChart.setOption(mapOption);
+        lineChart.setOption(lineOption);
+        
+        lineChart.setOption({ series: [ { name: 'Exportações', color: lineStyles.EXP.emphasis.color, lineStyle: { width: lineStyles.EXP.emphasis.width } }, {}, {} ]});
+
+        echarts.connect([mapChart, lineChart]);
+
+        const selector = document.getElementById('metricSelector');
+        let currentYear = displayYear; 
+
+        selector.addEventListener('change', (event) => {
+            const selectedMetric = event.target.value;
+            const expStyle = selectedMetric === 'EXP' ? lineStyles.EXP.emphasis : lineStyles.EXP.normal;
+            const impStyle = selectedMetric === 'IMP' ? lineStyles.IMP.emphasis : lineStyles.IMP.normal;
+            const balStyle = selectedMetric === 'BAL' ? lineStyles.BAL.emphasis : lineStyles.BAL.normal;
+            const newTitle = `${titleTemplates[selectedMetric]} (Ano ${currentYear})`;
+            const newMapData = (tradeData[selectedMetric][currentYear] || []).map(d => ({ name: d.name, value: d.us_value }));
+
+            mapChart.setOption({
+                title: { id: 'mainTitle', text: newTitle },
+                visualMap: [ getVisualMapOptions(selectedMetric, currentYear), noDataVisualMap ],
+                series: [ { id: 'mapSeries', data: newMapData } ]
+            });
+            lineChart.setOption({
+                series: [
+                    { name: 'Exportações', color: expStyle.color, lineStyle: { width: expStyle.width } },
+                    { name: 'Importações', color: impStyle.color, lineStyle: { width: impStyle.width } },
+                    { name: 'Balança Comercial', color: balStyle.color, lineStyle: { width: balStyle.width, type: 'dashed' } }
+                ]
+            });
+        });
+        
+        const updateMapByYear = echarts.throttle(function (year) {
+            if (year === currentYear) return;
+            currentYear = year; 
+            const selectedMetric = selector.value;
+            const newTitle = `${titleTemplates[selectedMetric]} (Ano ${year})`;
+            const newMapData = (tradeData[selectedMetric][year] || []).map(d => ({ name: d.name, value: d.us_value }));
+            
+            mapChart.setOption({
+                title: { id: 'mainTitle', text: newTitle },
+                series: [{ id: 'mapSeries', data: newMapData }],
+                visualMap: [ getVisualMapOptions(selectedMetric, year), noDataVisualMap ]
+            });
+        }, 100);
+
+        lineChart.on('updateAxisPointer', function(params) {
+            const dataIndex = params.dataIndex;
+            if (dataIndex >= 0 && dataIndex < years.length) {
+                const year = years[dataIndex];
+                updateMapByYear(year);
+            }
+        });
+
+        mapChart.getDom().addEventListener('wheel', function (event) {
+            event.preventDefault();
+
+            const currentDataZoom = lineChart.getOption().dataZoom[0];
+            const start = currentDataZoom.start;
+            const end = currentDataZoom.end;
+            
+            const zoomFactor = 0.1;
+            let newStart, newEnd;
+
+            if (event.deltaY < 0) {
+                newStart = start + (end - start) * zoomFactor / 2;
+                newEnd = end - (end - start) * zoomFactor / 2;
+            } else { 
+                newStart = start - (end - start) * zoomFactor / 2;
+                newEnd = end + (end - start) * zoomFactor / 2;
+            }
+
+            newStart = Math.max(0, newStart);
+            newEnd = Math.min(100, newEnd);
+
+            if (newEnd - newStart < 5) {
+                return;
+            }
+
+            lineChart.dispatchAction({
+                type: 'dataZoom',
+                start: newStart,
+                end: newEnd
+            });
+        });
+
+        window.addEventListener('resize', () => {
+            mapChart.resize();
+            lineChart.resize();
+        });
+    })
+    .catch(error => {
+        mapChart.hideLoading();
+        lineChart.hideLoading();
+        const errorOption = {
+            text: `ERRO: ${error.message}`,
+            showSpinner: false, textColor: '#c23531', maskColor: 'rgba(255, 255, 255, 0.8)'
+        };
+        mapChart.showLoading(errorOption);
+        lineChart.showLoading(errorOption);
+        console.error("Erro detalhado:", error);
+    });
+</script>
+</body>
+</html>
